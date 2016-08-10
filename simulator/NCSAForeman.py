@@ -43,6 +43,7 @@ class NCSAForeman(Foreman):
         self._machine_consume_q = Q_DIST_CONSUME
         # Messages we can recieve from BaseForeman
         self._msg_actions_bf = {
+            JOB_REQUEST: self.process_bf_job_request,
             DISTRIBUTOR_REQUEST: self.process_bf_distributor_request,
             STANDBY: self.process_bf_standby,
             READOUT: self.process_bf_readout,
@@ -83,6 +84,10 @@ class NCSAForeman(Foreman):
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
+    def process_bf_job_request(self, msg_params):
+        printc("NCSA Foreman is Online and ready for the Job")
+        return
+
     def process_bf_distributor_request(self, msg_params):
         # BaseForeman wants some distributors for a job
         # Get the amount of distributors requested
@@ -113,10 +118,12 @@ class NCSAForeman(Foreman):
                 counter = counter + 1
             # Send the pairing list back
             pair_msg = {}
-            pair_msg[MSG_TYPE] = PAIRING
+            pair_msg[MSG_TYPE] = ACK_RECEIVED
             pair_msg[JOB_NUM] = msg_params[JOB_NUM]
-            pair_msg[PAIRS] = current_pairs
-            self._publisher.publish_message(Q_NCSA_PUBLISH, yaml.dump(pair_msg))
+            pair_msg[MISC] = current_pairs
+            pair_msg[ACK_ID] = msg_params[ACK_ID]
+            pair_msg[ACK_NAME] = PAIRING
+            self._publisher.publish_message(Q_ACK_PUBLISH, yaml.dump(pair_msg))
         return
 
     def process_bf_standby(self, msg_params):
@@ -131,10 +138,20 @@ class NCSAForeman(Foreman):
             for distributor in distributors:
                 ds_msg = {}
                 ds_msg[MSG_TYPE] = STANDBY
-                ds_msg[XFER_FILE] = string.replace(xfer_file_main + '_' + distributor + '.raw', "D:", "")
+                # ds_msg[XFER_FILE] = string.replace(xfer_file_main + '_' + distributor + '.raw', "D:", "")
+                # The file was not being found on the Distributor machines so I put the exact name
+                ds_msg[XFER_FILE] = xfer_file_main + '_' + 'None' + '.raw'
                 routing_key = distributor + "_consume"
                 self._publisher.publish_message(routing_key, yaml.dump(ds_msg))
             printc("Distributors have been sent the STANDBY message.")
+            # Would probably wait and after getting ACK's from Distributors
+            printc("Sending the STANDBY ACK...")
+            ack_msg = {}
+            ack_msg[ACK_ID] = msg_params[ACK_ID]
+            ack_msg[ACK_NAME] = STANDBY
+            ack_msg[MSG_TYPE] = ACK_RECEIVED
+            ack_msg[JOB_NUM] = msg_params[JOB_NUM]
+            self._publisher.publish_message( Q_ACK_PUBLISH, yaml.dump(ack_msg) )
         else:
             printc("No distributors are assigned to job %s, no STANDBY sent." % job_num_tmp)
         return
@@ -152,6 +169,13 @@ class NCSAForeman(Foreman):
                 routing_key = distributor + "_consume"
                 self._publisher.publish_message(routing_key, yaml.dump(dist_start))
             printc("Distributors have been sent the READOUT message.")
+            printc("Sending the READOUT ACK...")
+            ack_msg = {}
+            ack_msg[ACK_ID] = msg_params[ACK_ID]
+            ack_msg[ACK_NAME] = READOUT
+            ack_msg[MSG_TYPE] = ACK_RECEIVED
+            ack_msg[JOB_NUM] = msg_params[JOB_NUM]
+            self._publisher.publish_message( Q_ACK_PUBLISH, yaml.dump(ack_msg) )
         else:
             printc("No distributors are assigned to job %s, no READOUT sent." % job_num_tmp)
         return

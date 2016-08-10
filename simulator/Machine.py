@@ -152,6 +152,23 @@ class Machine:
             return
         af_handler(msg_dict)
         ch.basic_ack(delivery_tag=method.delivery_tag)
+        # If there was an ACK_ID in this message, they want a response
+        # Initial idea is ACK to be sent after the callback has been called
+        if 'ACK_ID' in msg_dict:
+            self.send_ack(msg_dict['ACK_ID'], msg_dict['ACK_TYPE'])
+        return
+        
+    def send_ack(self, session_id, type = None):
+        if session_id is None:
+            return
+        if type is None:
+            type = 'UNDEFINED'
+        ack_msg = {}
+        ack_msg['MSG_TYPE'] = 'ACK_RECEIVED'
+        ack_msg['ACK_ID'] = str(session_id)
+        ack_msg['ACK_NAME'] = str(self._name)
+        ack_msg['ACK_TYPE'] = str(type)
+        self._publisher.publish_message(Q_ACK_PUBLISH, yaml.dump(ack_msg))
         return
 
     def process_foreman_job(self, msg_params):

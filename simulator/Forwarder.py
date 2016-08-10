@@ -59,11 +59,10 @@ class Forwarder(Machine):
 
     def process_foreman_job(self, msg_params):
         # Foreman has a new job for us
+        printc("Forwarder %s is ONLINE and READY to go" % self._name)
         self._current_job = str(msg_params['JOB_NUM'])
-        self._folder_title = self._current_job + ":" + self._name
-        # Confirm our state update with the foreman
-        self.state_update(self._folder_title, PARTNER, str(msg_params['PARTNER']))
-        self.state_update(self._folder_title, STATE, PAIRED)
+        self._folder_title = self._current_job+":"+self._name
+        #Confirm our state update with the foreman
         self._current_state = "JOB"
         printc("Ready for Job %s." % self._current_job)
         return
@@ -78,6 +77,8 @@ class Forwarder(Machine):
             printc("Sent STANDBY for this job already...")
             return
         printc("Entering STANDBY state.")
+        self.state_update(self._folder_title,PARTNER, str(msg_params['MATE']))
+        self.state_update(self._folder_title,STATE,PAIRED)
         self.state_update(self._folder_title, STATE, STANDBY)
         self._current_state = "STANDBY"
         # Learn who our partner is

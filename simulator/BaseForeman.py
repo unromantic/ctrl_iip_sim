@@ -22,6 +22,8 @@ from CustomPrint import CustomPrint
 custom_print = CustomPrint(PROGRAM_NAME)
 printc = custom_print.printc
 
+# Global Dict for Ancillary Data (ie. Pairings)
+pair_list = {}
 
 # Signal to enable shutting down from a shell script
 def ctrlccalled(*arg):
@@ -39,9 +41,12 @@ class BaseForeman(Foreman):
 
         # Job Scoreboard
         self._sb_job = Scoreboard(SCOREBOARD_DB_JOB, PROGRAM_NAME, 'NONE')
+        # ACK Scoreboard
+        self._sb_ack = Scoreboard(SCOREBOARD_DB_ACK, PROGRAM_NAME, 'NONE')
 
-        # Clean redis job database, done only by BaseForeman right at the start
+        # Clean redis job and ack database, done only by BaseForeman right at the start
         self._sb_job.flush_db()
+        self._sb_ack.flush_db()
         # Start internal job number at 0
         self._sb_job.reset_internal_job()
 
@@ -59,8 +64,11 @@ class BaseForeman(Foreman):
         }
         # NCSA messages
         self._msg_actions_ncsa = {
-            'INSUFFICIENT_NCSA_RESOURCES': self.process_ncsa_insufficient,
-            'PAIRING': self.process_ncsa_pairing
+            'INSUFFICIENT_NCSA_RESOURCES': self.process_ncsa_insufficient
+        }
+        # ACK messages
+        self._msg_actions_ack = {
+            'ACK_RECEIVED': self.process_ack_received
         }
 
         # Run parent init, starts forwarder scoreboard and consumer
@@ -83,6 +91,16 @@ class BaseForeman(Foreman):
         except:
             printc("Thread run_ncsa_consumer failed, quitting...")
             sys.exit()
+        
+        # ACK consumer gets messages from the forwarders and NCSA confirming
+        # if the orginial message was received
+        printc("Creating ACK consumer...")
+        self._ack_consumer = Consumer(self._broker_url, Q_ACK_PUBLISH)
+        try:
+            thread.start_new_thread(self.run_ack_consumer, ())
+        except:
+            printc("Thread run_ack_consumer failed, quitting...")
+            sys.exit()
         return
 
     # Message consumer functions, each blocks while waiting for a new message
@@ -96,6 +114,11 @@ class BaseForeman(Foreman):
     def run_ncsa_consumer(self):
         printc("NCSA message consumer is running...")
         self._ncsa_consumer.run(self.on_ncsa_message)
+        return
+
+    def run_ack_consumer(self):
+        printc("ACK message consumer is running...")
+        self._ack_consumer.run(self.on_ack_message)
         return
 
     # Forwarder-specific messaging
@@ -182,13 +205,60 @@ class BaseForeman(Foreman):
             self._sb_job.add_job_value(current_job, 'AVAIL_FORW', num_healthy_forwarders)
             self._sb_job.add_job_value(current_job, 'FORW_NEEDED', forwarders_needed)
             self._sb_job.set_job_state(current_job, 'WAITING_FOR_NCSA_RESP')
+            # Send NCSA a Job Request
+            job_request = {}
+            job_request[MSG_TYPE] = JOB_REQUEST
+            printc("Sending Job Request to NCSA...")
+            self._publisher.publish_message(Q_NCSA_CONSUME, yaml.dump(job_request))
+
+            # Send Forwarders New Job message (ie. Health Check)
+            # This is a timed event
+            timer_id = ''.join(random.choice(string.ascii_letters) for x in range(10))
+            new_job = {}
+            new_job[MSG_TYPE] = JOB
+            new_job[ACK_ID] = timer_id
+            new_job[ACK_TYPE] = HEALTH
+            new_job[JOB_NUM] = current_job
+            printc("Sending New Job Request to the Forwarders...")
+            for forw in forw_list:
+                routing_key = forw + "_consume"
+                self._publisher.publish_message(routing_key, yaml.dump(new_job))
+            printc("Starting the New Job Request Timer")
+            if not self.timer(3, timer_id, forw_list):
+                printc("Timer Expired without all Forwarders reporting...")
+                # Check Ack SB to see which ones did not report
+
             # Send NCSA a distributor request message
+            # This is a timed event
+            # Must reset the global Dict
+            timer_id = ''.join(random.choice(string.ascii_letters) for x in range(10))
+            global pair_list
+            pair_list = {}
             ncsa_dist_request = {}
             ncsa_dist_request[MSG_TYPE] = DISTRIBUTOR_REQUEST
             ncsa_dist_request[DIST_NEEDED] = forwarders_needed
             ncsa_dist_request['FORW_LIST'] = forw_list
             ncsa_dist_request[JOB_NUM] = msg_params[JOB_NUM]
+            ncsa_dist_request[ACK_ID] = timer_id
+            ncsa_dist_request[ACK_TYPE] = 'PAIR'
             self._publisher.publish_message(Q_NCSA_CONSUME, yaml.dump(ncsa_dist_request))
+            printc("Starting Timer for NCSA Reporting...")
+            if not self.timer(2, timer_id, {'PAIRING'}):
+                printc("Timer Expired without NCSA reporting")
+                # Tell DMCS we reject the Job
+            # Check if pair list is not empty
+            if not pair_list:
+                printc("Pair list does not exist")
+            printc("Pair List is %r" % pair_list)
+            # UPDATE JOB SCOREBOARD
+            self._sb_job.add_job_value(current_job, 'ASSIGNED_WORKERS', len(pair_list))
+            self._sb_job.add_job_value(current_job, 'PAIRS', pair_list)
+            # Report to DMCS that we accept the job
+            accept_job_msg = {}
+            accept_job_msg[MSG_TYPE] = 'JOB_ACCEPTED'
+            accept_job_msg[JOB_NUM] = msg_params[JOB_NUM]
+            self._publisher.publish_message(Q_DMCS_CONSUME, yaml.dump(accept_job_msg) )
+            self._sb_job.set_job_state(current_job, 'JOB_ACCEPTED')
             return
 
     def process_dmcs_standby(self, msg_params):
@@ -218,10 +288,15 @@ class BaseForeman(Foreman):
         self._sb_job.set_job_state(current_job, 'STANDBY_FORW_DIST_ALERTING')
 
         # Alert NCSA Foreman this job is entering STANDBY
+        # This is a timed event
+        timer_id = ''.join(random.choice(string.ascii_letters) for x in range(10))
         ncsa_standby_alert = {}
         ncsa_standby_alert[MSG_TYPE] = STANDBY
         ncsa_standby_alert[JOB_NUM] = current_job
         ncsa_standby_alert[XFER_FILE] = xfer_file_main
+        ncsa_standby_alert[ACK_ID] = timer_id
+        ncsa_standby_alert[ACK_NAME] = 'STANDBY'
+        printc("TELLING NCSA TO GO TO STANDBY")
         self._publisher.publish_message(Q_NCSA_CONSUME, yaml.dump(ncsa_standby_alert))
 
         # Send STANDBY to all the forwarders in this job
@@ -234,9 +309,21 @@ class BaseForeman(Foreman):
             fw_msg[MATE] = pairs[forwarder]
             fw_msg[JOB_NUM] = current_job
             fw_msg[XFER_FILE] = string.replace(xfer_file_main + '_' + pairs[forwarder] + '.raw', "D:", "")
+            fw_msg[ACK_ID] = timer_id
+            fw_msg[ACK_TYPE] = STANDBY
             routing_key = forwarder + "_consume"
             self._publisher.publish_message(routing_key, yaml.dump(fw_msg))
-        printc("Forwarders have been sent the STANDBY message.")
+        # Append STANDBY to the expected ACKS LIST
+        forwarders.append('STANDBY')
+        printc("STARTING THE STANDBY TIMER")
+        if not self.timer(4, timer_id, forwarders):
+            printc("Timer Expired without NCSA and FORWARDERS reporting in STANDBY")
+            # Can check ACK_SB to see who did not report
+        # Report to DMCS that the job is still good to go
+        standby_job_msg = {}
+        standby_job_msg[MSG_TYPE] = 'STANDBY_COMPLETE'
+        standby_job_msg[JOB_NUM] = msg_params[JOB_NUM]
+        self._publisher.publish_message(Q_DMCS_CONSUME, yaml.dump(standby_job_msg) )
         self._sb_job.set_job_state(current_job, 'STANDBY')
         return
 
@@ -259,12 +346,23 @@ class BaseForeman(Foreman):
         self._sb_job.set_job_state(current_job, 'READOUT')
 
         # Alert NCSA Foreman we are entering READOUT
+        # This is a timed event
+        timer_id = ''.join(random.choice(string.ascii_letters) for x in range(10))
         ncsa_readout_alert = {}
         ncsa_readout_alert[MSG_TYPE] = READOUT
         ncsa_readout_alert[JOB_NUM] = current_job
+        ncsa_readout_alert[ACK_ID] = timer_id
+        ncsa_readout_alert[ACK_TYPE] = READOUT
         self._publisher.publish_message(Q_NCSA_CONSUME, yaml.dump(ncsa_readout_alert))
+        printc("Starting the NCSA READOUT timer...")
+        if not self.timer(4, timer_id, {'READOUT'} ):
+            printc("Timer Expired without NCSA reporting in READOUT")
 
         # Send READOUT to forwarders
+        # This is a timed event
+        # In this prototype, we will wait for forwarders acks
+        # instead of condor, since we do not have that created
+        timer_id = ''.join(random.choice(string.ascii_letters) for x in range(10)) 
         pairs = self._sb_mach.machine_find_all_pairs(current_job)
         printc("%r" % pairs)
         forwarders = pairs.keys()
@@ -273,9 +371,23 @@ class BaseForeman(Foreman):
             fw_msg = {}
             fw_msg[MSG_TYPE] = READOUT
             fw_msg[JOB_NUM] = msg_params[JOB_NUM]
+            fw_msg[ACK_ID] = timer_id
+            fw_msg[ACK_TYPE] = READOUT
             routing_key = forwarder + "_consume"
             self._publisher.publish_message(routing_key, yaml.dump(fw_msg))
-        printc("Forwarders have been sent the READOUT message.")
+
+        printc("Starting the timer for CONDOR ACK... ")
+        # For now it is just waiting for the acks from the forwarders
+        if not self.timer(4, timer_id, forwarders ):
+            printc("Timer Expired without CONDOR reporting in READOUT")
+            # Can check ACK_SB to see who did not report 
+
+        # Report to DMCS that the job was completed 
+        completed_job_msg = {}
+        completed_job_msg[MSG_TYPE] = 'JOB_COMPLETE'
+        completed_job_msg[JOB_NUM] = msg_params[JOB_NUM]
+        self._publisher.publish_message(Q_DMCS_CONSUME, yaml.dump(completed_job_msg) )
+        self._sb_job.set_job_state(current_job, 'JOB_COMPLETE')
         return
 
     def process_dmcs_cancel(self, msg_params):
@@ -317,31 +429,6 @@ class BaseForeman(Foreman):
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
-    # If NCSA sends a list of pairings, process it
-    def process_ncsa_pairing(self, msg_params):
-        current_job = msg_params[JOB_NUM]
-        self._sb_job.set_job_state(current_job, 'STANDBY_ACCEPTING_JOB')
-        # Use dict() to copy the pairs list over
-        # instead of just referencing them
-        current_pairs = dict(msg_params[PAIRS])
-
-        # Put all forwarders on this job in the PAIRING state
-        for forwarder in current_pairs:
-            forw_pairing_alert = {}
-            forw_pairing_alert[MSG_TYPE] = JOB
-            forw_pairing_alert[JOB_NUM] = msg_params[JOB_NUM]
-            forw_pairing_alert[PARTNER] = current_pairs[forwarder]
-            self._publisher.publish_message(self._sb_mach.get_consume_q(forwarder), yaml.dump(forw_pairing_alert))
-        self._sb_job.add_job_value(current_job, 'ASSIGNED_WORKERS', len(current_pairs))
-        self._sb_job.add_job_value(current_job, 'PAIRS', current_pairs)
-
-        # Report to DMCS that we accept the job
-        accept_job_msg = {}
-        accept_job_msg[MSG_TYPE] = IN_READY_STATE
-        accept_job_msg[JOB_NUM] = msg_params[JOB_NUM]
-        self._publisher.publish_message(Q_DMCS_CONSUME, yaml.dump(accept_job_msg))
-        self._sb_job.set_job_state(current_job, 'STANDBY_JOB_ACCEPTED')
-        return
 
     # NCSA did not have enough distributors available, reject this job for now
     def process_ncsa_insufficient(self, msg_params):
@@ -360,6 +447,37 @@ class BaseForeman(Foreman):
         decline_job_msg[JOB_NUM] = msg_params[JOB_NUM]
         self._publisher.publish_message(Q_DMCS_CONSUME, yaml.dump(decline_job_msg))
         return
+
+    # ACK MESSAGE HANDLING
+    def on_ack_message(self, ch, method, properties, body):
+        msg_dict = yaml.load(body)
+        af_handler = self._msg_actions_ack.get(msg_dict[MSG_TYPE])
+        af_handler(msg_dict)
+        ch.basic_ack(delivery_tag = method.delivery_tag)
+        return
+
+
+    def process_ack_received(self, msg_params):
+        ack_id = msg_params.get(ACK_ID)
+        ack_type = msg_params.get(ACK_TYPE)
+        ack_name = msg_params.get(ACK_NAME)
+        printc("GOT AN ACK with name %s with ID %s" % (str(ack_name), str(ack_id)) )
+        # Update ACK Scoreboard 
+        if not self._sb_ack.update_ack(ack_id, ack_name):
+            printc("Unable to add the ack...")
+        if MISC in msg_params:
+            printc("UPDATING THE PAIR LIST")
+            global pair_list
+            pair_list = msg_params.get(MISC)
+        return
+
+
+    def timer(self, delay, ack_id, ack_expected):
+        count = delay * 2
+        while (count and not self._sb_ack.check_ack(ack_id, ack_expected) ):
+            time.sleep(0.5)
+            count = count - 1
+        return self._sb_ack.check_ack(ack_id, ack_expected)
 
 
 # Run BaseForeman

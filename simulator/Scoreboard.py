@@ -28,6 +28,20 @@ class Scoreboard:
         self._redis.flushdb()
         return
 
+    def update_ack(self, ack_id, ack_name):
+        if self._redis.sadd(ack_id, ack_name):
+            return True
+        return False
+        
+    def check_ack(self, ack_id, expected_acks):
+        members = self._redis.smembers(ack_id)
+        if not members:
+            return False
+        for name in expected_acks:
+            if not self._redis.sismember(ack_id, name):
+                return False
+        return True        
+
     def machine_update(self, key, field, value):
         self._redis.hset(key, field, value)
         return
