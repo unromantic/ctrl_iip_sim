@@ -32,19 +32,12 @@ def ctrlccalled(*arg):
 
 
 class BaseForeman(Foreman):
-    # BaseForeman receives messagse from DMCS
+    # BaseForeman receives messages from DMCS
     # and coordinates with forwarders and NCSAForeman.
     PROGRAM_NAME = "BASE"
 
     def __init__(self):
         printc("Starting...")
-
-        # Timer tracking incrementers
-        self._timer_health_check = 1
-        self._timer_dist_req = 1
-        self._timer_standby = 1
-        self._timer_readout = 1
-        self._timer_condor = 1
 
         # Job Scoreboard
         self._sb_job = Scoreboard(SCOREBOARD_DB_JOB, PROGRAM_NAME, 'NONE')
@@ -222,7 +215,6 @@ class BaseForeman(Foreman):
             # Send forwarders New Job message (i.e. Health Check)
             # This is a timed event
             timer_id = 'ACK:1_Health:' + current_job
-            self._timer_health_check += 1
             new_job = {}
             new_job[MSG_TYPE] = JOB
             new_job[ACK_ID] = timer_id
@@ -248,7 +240,6 @@ class BaseForeman(Foreman):
             # This is a timed event
             # Must reset the global dict
             timer_id = 'ACK:2_Dist_req:' + current_job
-            self._timer_dist_req += 1
             global glb_pair_list
             glb_pair_list = None
             ncsa_dist_request = {}
@@ -288,7 +279,7 @@ class BaseForeman(Foreman):
                 failed_msg[JOB_NUM] = msg_params[JOB_NUM]
                 self._publisher.publish_message(Q_DMCS_CONSUME, yaml.dump(failed_msg))
                 return
-            printc("Pair List is %r" % glb_pair_list)
+            printc("Pair list is %r" % glb_pair_list)
             # Update Job scoreboard
             self._sb_job.add_job_value(current_job, 'ASSIGNED_WORKERS', len(glb_pair_list))
             self._sb_job.add_job_value(current_job, 'PAIRS', glb_pair_list)
@@ -329,7 +320,6 @@ class BaseForeman(Foreman):
         # Alert NCSA Foreman this job is entering STANDBY
         # This is a timed event
         timer_id = 'ACK:3_Standby:' + current_job
-        self._timer_standby += 1
         ncsa_standby_alert = {}
         ncsa_standby_alert[MSG_TYPE] = STANDBY
         ncsa_standby_alert[JOB_NUM] = current_job
@@ -403,7 +393,6 @@ class BaseForeman(Foreman):
         # Alert NCSA Foreman we are entering READOUT
         # This is a timed event
         timer_id = 'ACK:4_Readout:' + current_job
-        self._timer_readout += 1
         ncsa_readout_alert = {}
         ncsa_readout_alert[MSG_TYPE] = READOUT
         ncsa_readout_alert[JOB_NUM] = current_job
@@ -423,7 +412,6 @@ class BaseForeman(Foreman):
         # In this prototype, we will wait for forwarders acks
         # instead of Condor, since we do not have that created
         timer_id = 'ACK:5_Condor:' + current_job
-        self._timer_condor += 1
         pairs = self._sb_mach.machine_find_all_pairs(current_job)
         printc("%r" % pairs)
         forwarders = pairs.keys()
@@ -557,5 +545,6 @@ def main():
         pass
     printc("BaseForeman quit by user.")
     return
+
 
 if __name__ == "__main__": main()
