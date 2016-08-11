@@ -26,12 +26,14 @@ def ctrlccalled(*arg):
 
 class Forwarder(Machine):
     # Machine that creates and sends the image files
+
     def child_init(self):
+        # An init called by parent __init__ to set up child specific values
         self._type = 'FORW'
         self._publish_queue = Q_FORW_PUBLISH
         self._consume_queue = Q_FORW_CONSUME
         # Internal variable of current job
-        # a forwardershould only ever be on one job at a time
+        # a forwarder should only ever be on one job at a time
         self._current_job = "NONE"
         # Initialize the cancel checking variable
         self.update_thread_run(THREAD_NOT_RUNNING)
@@ -56,13 +58,12 @@ class Forwarder(Machine):
 
     # Foreman messaging
 
-
     def process_foreman_job(self, msg_params):
         # Foreman has a new job for us
-        printc("Forwarder %s is ONLINE and READY to go" % self._name)
+        printc("Forwarder %s is online and ready to go" % self._name)
         self._current_job = str(msg_params['JOB_NUM'])
-        self._folder_title = self._current_job+":"+self._name
-        #Confirm our state update with the foreman
+        self._folder_title = self._current_job + ":" + self._name
+        # Confirm our state update with the foreman
         self._current_state = "JOB"
         printc("Ready for Job %s." % self._current_job)
         return
@@ -77,8 +78,8 @@ class Forwarder(Machine):
             printc("Sent STANDBY for this job already...")
             return
         printc("Entering STANDBY state.")
-        self.state_update(self._folder_title,PARTNER, str(msg_params['MATE']))
-        self.state_update(self._folder_title,STATE,PAIRED)
+        self.state_update(self._folder_title, PARTNER, str(msg_params['MATE']))
+        self.state_update(self._folder_title, STATE, PAIRED)
         self.state_update(self._folder_title, STATE, STANDBY)
         self._current_state = "STANDBY"
         # Learn who our partner is
@@ -110,7 +111,7 @@ class Forwarder(Machine):
         self.state_update(self._folder_title, STATE, WORKING)
         printc("Entering READOUT state.")
         self._current_state = "READOUT"
-        # Read in random data, pretending it is the camera buffer 
+        # Read in random data, pretending it is the camera buffer
         printc("Reading from camera buffer...")
         random_data = open("/dev/urandom", 'r')
         tmp_file = open(self._xfer_file, 'wb')

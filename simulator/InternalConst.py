@@ -56,11 +56,11 @@ TEST_FILE_SIZE = 8096  # in bytes + header size
 # Scoreboard constants
 RAFTS = 'RAFTS'
 JOBS = 'jobs'
-# All scoreboards in the same database right now EXCEPT for ACK
+# All scoreboards in the same database right now
 SCOREBOARD_DB_JOB = 1
 SCOREBOARD_DB_FORW = 1
 SCOREBOARD_DB_DIST = 1
-SCOREBOARD_DB_ACK = 2
+SCOREBOARD_DB_ACK = 1
 
 CHECKING_RESOURCES = 'CHECKING_RESOURCES'
 LIST_FORWARDERS = 'LIST:FORWARDERS'
@@ -75,3 +75,5 @@ FAILED = 'FAILED'
 CANCEL = 'CANCEL'
 TRANSFER_DONE = 'TRANSFER_DONE'
 CANCELED = 'CANCELED'
+TIMER_PRECISION = 2
+ACK_BOOL = 'ACK_BOOL'

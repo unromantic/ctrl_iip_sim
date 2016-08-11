@@ -157,7 +157,7 @@ class Machine:
         if 'ACK_ID' in msg_dict:
             self.send_ack(msg_dict['ACK_ID'], msg_dict['ACK_TYPE'])
         return
-        
+
     def send_ack(self, session_id, type = None):
         if session_id is None:
             return
@@ -168,6 +168,7 @@ class Machine:
         ack_msg['ACK_ID'] = str(session_id)
         ack_msg['ACK_NAME'] = str(self._name)
         ack_msg['ACK_TYPE'] = str(type)
+        ack_msg['ACK_BOOL'] = 'TRUE'
         self._publisher.publish_message(Q_ACK_PUBLISH, yaml.dump(ack_msg))
         return
 

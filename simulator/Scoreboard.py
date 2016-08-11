@@ -32,15 +32,30 @@ class Scoreboard:
         if self._redis.sadd(ack_id, ack_name):
             return True
         return False
-        
+
     def check_ack(self, ack_id, expected_acks):
-        members = self._redis.smembers(ack_id)
-        if not members:
+        if not self._redis.smembers(ack_id):
             return False
         for name in expected_acks:
             if not self._redis.sismember(ack_id, name):
                 return False
-        return True        
+        return True
+
+    def count_ack(self, ack_id, expected_acks):
+        count = 0
+        if self._redis.smembers(ack_id):
+            for name in expected_acks:
+                if self._redis.sismember(ack_id, name):
+                    count += 1
+        return count
+
+    def missing_acks(self, ack_id, expected_acks):
+        missing = list(expected_acks)
+        members = self._redis.smembers(ack_id)
+        if members:
+            for member in members:
+                missing.remove(member)
+        return missing
 
     def machine_update(self, key, field, value):
         self._redis.hset(key, field, value)
