@@ -101,9 +101,13 @@ class NCSAForeman(Foreman):
         if dist_needed > num_healthy_distributors:
             printc("Not enough distributors.")
             insuff_dist_msg = {}
-            insuff_dist_msg[MSG_TYPE] = INSUFFICIENT_NCSA_RESOURCES
+            insuff_dist_msg[MSG_TYPE] = ACK_RECEIVED
             insuff_dist_msg[JOB_NUM] = msg_params[JOB_NUM]
-            self._publisher.publish_message(Q_NCSA_PUBLISH, yaml.dump(insuff_dist_msg))
+            insuff_dist_msg[PAIRS] = None
+            insuff_dist_msg[ACK_ID] = msg_params[ACK_ID]
+            insuff_dist_msg[ACK_NAME] = PAIRING
+            insuff_dist_msg[ACK_BOOL] = False
+            self._publisher.publish_message(Q_ACK_PUBLISH, yaml.dump(insuff_dist_msg))
         # Otherwise, take the list of forwarders sent to us and pair each one
         # with an IDLE distributor and then send that pairing list back
         else:

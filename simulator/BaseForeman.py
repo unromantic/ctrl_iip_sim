@@ -64,7 +64,7 @@ class BaseForeman(Foreman):
         }
         # NCSA messages
         self._msg_actions_ncsa = {
-            'INSUFFICIENT_NCSA_RESOURCES': self.process_ncsa_insufficient
+            'None'
         }
         # ACK messages
         self._msg_actions_ack = {
@@ -263,6 +263,15 @@ class BaseForeman(Foreman):
             # This means NCSA responded with ACK_BOOL as FALSE
             if glb_pair_list is None:
                 printc("No pair list, NCSA didn't have enough distributors.")
+                # NCSA did not have enough distributors available, reject this job for now
+                current_job = msg_params[JOB_NUM]
+                forw_list = self._sb_mach.machine_find_all_m(LIST_FORWARDERS, current_job)
+                # Set forwarders we reserved for this job from BUSY back to IDLE
+                self._sb_mach.set_list_to_idle(forw_list)
+                self._sb_job.set_job_state(current_job, 'STANDBY_JOB_DENIED_INSUF_DIST')
+                self._sb_job.add_job_value(current_job, 'TIME_FAILED',
+                                   self._sb_job._redis.time()[0])
+                self._sb_job.add_job_value(current_job, 'STATUS', 'INACTIVE')
                 # Tell DMCS we reject the job
                 failed_msg = {}
                 failed_msg[MSG_TYPE] = 'INSUFFICIENT_DISTRIBUTORS'
@@ -484,24 +493,6 @@ class BaseForeman(Foreman):
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
-    def process_ncsa_insufficient(self, msg_params):
-        # NCSA did not have enough distributors available, reject this job for now
-        current_job = msg_params[JOB_NUM]
-        forw_list = self._sb_mach.machine_find_all_m(LIST_FORWARDERS, current_job)
-        # Set forwarders we reserved for this job from BUSY back to IDLE
-        self._sb_mach.set_list_to_idle(forw_list)
-        self._sb_job.set_job_state(current_job, 'STANDBY_JOB_DENIED_INSUF_DIST')
-        self._sb_job.add_job_value(current_job, 'TIME_FAILED',
-                                   self._sb_job._redis.time()[0])
-        self._sb_job.add_job_value(current_job, 'STATUS', 'INACTIVE')
-
-        # Tell DMCS we cannot take this job right now
-        decline_job_msg = {}
-        decline_job_msg[MSG_TYPE] = INSUFFICIENT_NCSA_RESOURCES
-        decline_job_msg[JOB_NUM] = msg_params[JOB_NUM]
-        self._publisher.publish_message(Q_DMCS_CONSUME, yaml.dump(decline_job_msg))
-        return
-
     # Acknowledgment messaging
 
     def on_ack_message(self, ch, method, properties, body):
@@ -521,7 +512,7 @@ class BaseForeman(Foreman):
         # Update ACK Scoreboard
         if not self._sb_ack.update_ack(ack_id, ack_name):
             printc("Unable to add the ack...")
-        if PAIRS in msg_params:
+        if PAIRS in msg_params and ack_bool:
             printc("Updating the pair list")
             global glb_pair_list
             glb_pair_list = msg_params.get(PAIRS)
