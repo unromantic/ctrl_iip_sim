@@ -129,6 +129,7 @@ class NCSAForeman(Foreman):
             pair_msg[PAIRS] = current_pairs
             pair_msg[ACK_ID] = msg_params[ACK_ID]
             pair_msg[ACK_NAME] = PAIRING
+            pair_msg[ACK_BOOL] = True
             self._publisher.publish_message(Q_ACK_PUBLISH, yaml.dump(pair_msg))
         return
 
